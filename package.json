@@ -1,0 +1,11 @@
+{
+  "name": "pediatric-growth-bot",
+  "version": "1.0.0",
+  "description": "AI Pediatric Growth Consultation Chatbot",
+  "main": "api/index.js",
+  "dependencies": {
+    "@vercel/kv": "^1.0.1",
+    "express": "^4.19.2",
+    "openai": "^4.52.0"
+  }
+}
