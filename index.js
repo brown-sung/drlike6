@@ -35,7 +35,7 @@ function loadData() {
 
     for (const [key, filename] of Object.entries(files)) {
       const [sex, type] = key.split('_');
-      // [수정됨] Vercel 환경에서 안정적으로 파일을 찾기 위해 process.cwd() 사용
+      // Vercel 환경에서 안정적으로 파일을 찾기 위해 process.cwd() 사용
       // process.cwd()는 프로젝트의 루트 디렉토리를 가리킵니다.
       const filePath = path.join(process.cwd(), filename);
       
@@ -114,16 +114,31 @@ async function callOpenAI(prompt) {
   return data.choices[0].message.content;
 }
 
-// 루트 경로 핸들러
+// [수정됨] 루트 경로 핸들러: 배포 성공 확인 페이지
 app.get('/', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    message: '성장 발달 챗봇 서버가 정상적으로 실행 중입니다. 카카오톡 채널에서 이용해주세요.'
-  });
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.status(200).send(`
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>서버 실행 중</title>
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; text-align: center; padding: 40px; background-color: #f8f9fa;">
+      <div style="max-width: 600px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        <h1 style="color: #4CAF50;">✅ 서버가 정상적으로 실행 중입니다</h1>
+        <p style="font-size: 1.2em; color: #333;">성장 발달 챗봇 서버가 성공적으로 배포되었습니다.</p>
+        <p style="color: #555;">이 주소는 카카오톡 스킬 연동을 위한 API 서버입니다.<br>카카오톡 채널에서 챗봇을 이용해주세요.</p>
+        <p style="font-size: 0.9em; color: #888; margin-top: 30px;">스킬 경로는 <strong>/skill</strong> 입니다.</p>
+      </div>
+    </body>
+    </html>
+  `);
 });
 
 
-// [수정됨] 카카오톡 스킬 API 엔드포인트 경로를 /skill로 변경
+// 카카오톡 스킬 API 엔드포인트
 app.post('/skill', async (req, res) => {
   const userId = req.body.userRequest.user.id;
   const userInput = req.body.userRequest.utterance;
