@@ -16,9 +16,58 @@ app.use(express.json());
 // --- 1. 설정: 환경변수에서 OpenAI API 키 가져오기 ---
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
+<<<<<<< HEAD
 // [수정됨] loadData() 함수가 더 이상 필요 없으므로 삭제되었습니다.
 // 데이터는 서버 시작 시 'lms_data.js'에서 바로 로드됩니다.
 console.log("LMS 데이터가 코드를 통해 로드되었습니다.");
+=======
+// --- 2. LMS 데이터 로드 ---
+const lmsData = {
+  male: { height: {}, weight: {} },
+  female: { height: {}, weight: {} },
+};
+
+/**
+ * Loads LMS data from CSV files into memory.
+ * CSV 파일에서 LMS 데이터를 메모리로 로드합니다.
+ */
+function loadData() {
+  try {
+    const files = {
+      male_height: 'male_height.csv',
+      male_weight: 'male_weight.csv',
+      female_height: 'female_height.csv',
+      female_weight: 'female_weight.csv',
+    };
+
+    for (const [key, filename] of Object.entries(files)) {
+      const [sex, type] = key.split('_');
+      // [수정됨] 'data' 폴더 내의 파일을 찾도록 경로 수정
+      const filePath = path.join(process.cwd(), 'data', filename);
+      
+      if (!fs.existsSync(filePath)) {
+         throw new Error(`CSV 파일을 찾을 수 없습니다. 'data' 폴더에 파일이 있는지 확인하세요: ${filename}`);
+      }
+
+      const csvData = fs.readFileSync(filePath, 'utf8');
+      const records = parse(csvData, { columns: true, skip_empty_lines: true });
+
+      records.forEach(record => {
+        lmsData[sex][type][record.Month] = {
+          L: parseFloat(record.L),
+          M: parseFloat(record.M),
+          S: parseFloat(record.S),
+        };
+      });
+    }
+    console.log('LMS 데이터 로딩 완료.');
+  } catch (error) {
+    console.error('CSV 파일 로딩 중 치명적 오류 발생:', error);
+    // 서버가 시작되지 못하도록 프로세스를 종료합니다.
+    process.exit(1);
+  }
+}
+>>>>>>> 38bde1c3e553c13a1d3712ae8b8df16413dff7a2
 
 // --- 3. 대화 상태 저장을 위한 메모리 내 세션 ---
 const userSessions = {};
@@ -224,6 +273,11 @@ app.post('/skill', async (req, res) => {
   }
 });
 
+<<<<<<< HEAD
+=======
+// 서버 시작 전 데이터 로딩
+loadData(); 
+>>>>>>> 38bde1c3e553c13a1d3712ae8b8df16413dff7a2
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`서버가 ${PORT} 포트에서 실행 중입니다.`);
