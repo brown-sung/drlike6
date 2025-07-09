@@ -37,7 +37,7 @@ function loadData() {
     for (const [key, filename] of Object.entries(files)) {
       const [sex, type] = key.split('_');
       // Use path.join for robust file path resolution
-      const filePath = path.join(__dirname, filename);
+      const filePath = path.join(__dirname, '..', filename); // Vercel's build environment adjustment
       const csvData = fs.readFileSync(filePath, 'utf8');
       const records = parse(csvData, { columns: true, skip_empty_lines: true });
 
@@ -121,6 +121,16 @@ async function callOpenAI(prompt) {
   const data = await response.json();
   return data.choices[0].message.content;
 }
+
+// --- [수정됨] 루트 경로 핸들러 추가 ---
+// 브라우저에서 접속 시 서버 상태를 알려주는 역할을 합니다.
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    message: '성장 발달 챗봇 서버가 정상적으로 실행 중입니다. 카카오톡 채널에서 이용해주세요.'
+  });
+});
+
 
 // --- 6. 카카오톡 스킬 API 엔드포인트 ---
 app.post('/api/skill', async (req, res) => {
@@ -243,8 +253,9 @@ app.post('/api/skill', async (req, res) => {
 
 // Server startup
 const PORT = process.env.PORT || 3000;
+// Load data before starting the server
+loadData(); 
 app.listen(PORT, () => {
-  loadData(); // Load data on server start
   console.log(`서버가 ${PORT} 포트에서 실행 중입니다.`);
 });
 
