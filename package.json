@@ -1,11 +1,16 @@
 {
-  "name": "pediatric-growth-bot",
+  "name": "growth-chatbot-kakaotalk",
   "version": "1.0.0",
-  "description": "AI Pediatric Growth Consultation Chatbot",
-  "main": "api/index.js",
+  "description": "A chatbot for calculating child growth percentiles on KakaoTalk.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
-    "@vercel/kv": "^1.0.1",
     "express": "^4.19.2",
-    "openai": "^4.52.0"
-  }
+    "csv-parse": "^5.5.6",
+    "jstat": "^1.9.6",
+    "node-fetch": "^3.3.2"
+  },
+  "type": "commonjs"
 }
