@@ -35,12 +35,11 @@ function loadData() {
 
     for (const [key, filename] of Object.entries(files)) {
       const [sex, type] = key.split('_');
-      // Vercel 환경에서 안정적으로 파일을 찾기 위해 process.cwd() 사용
-      // process.cwd()는 프로젝트의 루트 디렉토리를 가리킵니다.
-      const filePath = path.join(process.cwd(), filename);
+      // [수정됨] 'data' 폴더 내의 파일을 찾도록 경로 수정
+      const filePath = path.join(process.cwd(), 'data', filename);
       
       if (!fs.existsSync(filePath)) {
-         throw new Error(`CSV 파일을 찾을 수 없습니다. 프로젝트 루트에 파일이 있는지 확인하세요: ${filename}`);
+         throw new Error(`CSV 파일을 찾을 수 없습니다. 'data' 폴더에 파일이 있는지 확인하세요: ${filename}`);
       }
 
       const csvData = fs.readFileSync(filePath, 'utf8');
@@ -57,6 +56,7 @@ function loadData() {
     console.log('LMS 데이터 로딩 완료.');
   } catch (error) {
     console.error('CSV 파일 로딩 중 치명적 오류 발생:', error);
+    // 서버가 시작되지 못하도록 프로세스를 종료합니다.
     process.exit(1);
   }
 }
@@ -114,7 +114,7 @@ async function callOpenAI(prompt) {
   return data.choices[0].message.content;
 }
 
-// [수정됨] 루트 경로 핸들러: 배포 성공 확인 페이지
+// 루트 경로 핸들러: 배포 성공 확인 페이지
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.status(200).send(`
