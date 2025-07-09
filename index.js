@@ -36,17 +36,11 @@ function loadData() {
     for (const [key, filename] of Object.entries(files)) {
       const [sex, type] = key.split('_');
       // [수정됨] Vercel 환경에서 안정적으로 파일을 찾기 위해 process.cwd() 사용
+      // process.cwd()는 프로젝트의 루트 디렉토리를 가리킵니다.
       const filePath = path.join(process.cwd(), filename);
       
       if (!fs.existsSync(filePath)) {
-          // For serverless functions, files might be in a different relative path.
-          // Let's try another common path for Vercel.
-          const alternativePath = path.join(process.cwd(), 'api', filename);
-           if(fs.existsSync(alternativePath)) {
-               filePath = alternativePath;
-           } else {
-               throw new Error(`CSV 파일을 찾을 수 없습니다: ${filename} at ${filePath}`);
-           }
+         throw new Error(`CSV 파일을 찾을 수 없습니다. 프로젝트 루트에 파일이 있는지 확인하세요: ${filename}`);
       }
 
       const csvData = fs.readFileSync(filePath, 'utf8');
@@ -129,8 +123,8 @@ app.get('/', (req, res) => {
 });
 
 
-// 카카오톡 스킬 API 엔드포인트
-app.post('/api/skill', async (req, res) => {
+// [수정됨] 카카오톡 스킬 API 엔드포인트 경로를 /skill로 변경
+app.post('/skill', async (req, res) => {
   const userId = req.body.userRequest.user.id;
   const userInput = req.body.userRequest.utterance;
 
@@ -150,13 +144,11 @@ app.post('/api/skill', async (req, res) => {
     `;
     const extractedJsonString = await callOpenAI(extractionPrompt);
     
-    // [수정됨] OpenAI 응답이 JSON이 아닐 경우를 대비한 안정적인 파싱
     let extractedData;
     try {
         extractedData = JSON.parse(extractedJsonString.trim());
     } catch (parseError) {
         console.error('OpenAI 응답 JSON 파싱 오류:', parseError, '응답 원문:', extractedJsonString);
-        // 파싱 실패 시 사용자에게 재시도를 요청하는 응답을 보냅니다.
         return res.json({
             version: "2.0",
             template: {
@@ -248,7 +240,6 @@ app.post('/api/skill', async (req, res) => {
     });
 
   } catch (error) {
-    // [수정됨] Vercel 로그에서 확인할 수 있도록 상세한 오류 로깅
     console.error('스킬 처리 중 심각한 오류 발생:', error.message, error.stack);
     res.status(500).json({
       version: '2.0',
