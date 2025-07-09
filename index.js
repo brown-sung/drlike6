@@ -48,7 +48,7 @@ async function callOpenAI(prompt, isJsonMode = false) {
   const body = {
     model: 'gpt-4o',
     messages: [{ role: 'system', content: 'You are a helpful and empathetic AI assistant named Dr. Likey, specializing in pediatric growth analysis. Your primary language is Korean.' }, { role: 'user', content: prompt }],
-    temperature: 0.7, // 창의적이고 자연스러운 응답을 위해 약간 올림
+    temperature: 0.5, // 일관된 JSON 출력을 위해 온도를 약간 낮춤
   };
 
   if (isJsonMode) {
@@ -98,108 +98,116 @@ app.post('/skill', async (req, res) => {
   let session = userSessions[userId] || { sex: null, age_month: null, height_cm: null, weight_kg: null };
 
   try {
-    // [프롬프트 개선됨] 대화 관리와 정보 추출을 통합한 지능형 프롬프트
-    const mainConversationPrompt = `
-      You are 'Dr. Likey', an AI pediatrician. Your task is to manage a conversation to collect a child's growth data and respond naturally.
+    // [구조 개선] 1. AI 분석가: 다음에 할 행동과 데이터를 결정
+    const decisionPrompt = `
+      You are an intelligent "router" for a pediatric chatbot. Your job is to analyze the user's message and the current data, then decide the next logical action.
 
-      **Current Conversation State (Session Data):**
+      **Current Data (Session):**
       ${JSON.stringify(session)}
 
-      **User's Latest Message:**
+      **User's Message:**
       "${userInput}"
 
-      **Your Task:**
-      1.  **Analyze the user's message:** Is it a greeting, providing information, or something else?
-      2.  **Update Data:** Extract \`sex\`, \`age_month\`, \`height_cm\`, \`weight_kg\`. Infer units if missing (e.g., if asking for height, "100" means 100cm). Update the session data. If the user wants to reset, set \`reset: true\`.
-      3.  **Formulate a Response:**
-          - If it's a greeting, respond with a warm welcome.
-          - If information was provided, confirm it warmly (e.g., "아, 아드님이군요!") and then ask for the *next* missing piece of information.
-          - If the user asks a question, answer it if you can.
-          - If all data is collected, set \`isComplete: true\` in your response.
-      4.  **Output Format:** Your entire output **MUST** be a single, valid JSON object with the following structure:
-          \`\`\`json
-          {
-            "updatedData": { "sex": "male", "age_month": 10, "height_cm": 100, "weight_kg": null, "reset": false },
-            "isComplete": false,
-            "responseText": "네, 10개월 된 남자아이군요! 키는 100cm으로 확인됐습니다. 마지막으로 아이의 몸무게를 알려주시겠어요?"
-          }
-          \`\`\`
+      **Your Task: Decide the next action and extract data.**
+      1.  **Analyze Intent:** Is the user greeting, providing data, asking to reset, or something else?
+      2.  **Extract Data:** Pull \`sex\`, \`age_month\`, \`height_cm\`, \`weight_kg\` from the user's message. Assume units (e.g., if height is missing and user says "100", that is 100cm).
+      3.  **Determine Action:**
+          - If the user is just greeting: \`"action": "greet"\`
+          - If new data was provided but more is needed: \`"action": "confirm_and_ask_next"\`
+          - If no new data was provided and some is missing: \`"action": "ask_for_missing_info"\`
+          - If all data is now complete: \`"action": "generate_report"\`
+          - If user wants to reset: \`"action": "reset"\`
+      4.  **Output:** Respond ONLY with a valid JSON object in the following format.
+
+      **Example 1 (Greeting):**
+      User says "안녕하세요".
+      Output: \`{"action": "greet", "data": {}}\`
+
+      **Example 2 (Providing data):**
+      Session has \`{"sex": "male", "age_month": null, ...}\`. User says "10개월".
+      Output: \`{"action": "confirm_and_ask_next", "data": {"age_month": 10}}\`
+      
+      **Example 3 (All data complete):**
+      Session has \`{"sex": "male", "age_month": 10, "height_cm": 100, "weight_kg": null}\`. User says "15kg".
+      Output: \`{"action": "generate_report", "data": {"weight_kg": 15}}\`
     `;
     
-    const rawResponse = await callOpenAI(mainConversationPrompt, true);
-    
-    let aiDecision;
-    try {
-        aiDecision = JSON.parse(rawResponse);
-    } catch (parseError) {
-        console.error('AI 응답 JSON 파싱 오류:', parseError, '응답 원문:', rawResponse);
-        return res.json({
-            version: "2.0",
-            template: { outputs: [{ simpleText: { text: "죄송합니다, 잠시 응답을 처리하는 데 문제가 생겼어요. 다시 한번 말씀해주시겠어요?" } }] }
-        });
-    }
-
-    const { updatedData, isComplete, responseText } = aiDecision;
-
-    if (updatedData?.reset) {
-      userSessions[userId] = { sex: null, age_month: null, height_cm: null, weight_kg: null };
-      return res.json({
-        version: '2.0',
-        template: { outputs: [{ simpleText: { text: '네, 처음부터 다시 시작하겠습니다. 무엇을 도와드릴까요?' } }] }
-      });
-    }
+    const rawDecision = await callOpenAI(decisionPrompt, true);
+    const decision = JSON.parse(rawDecision);
 
     // 세션 업데이트
-    session = { ...session, ...updatedData };
+    session = { ...session, ...decision.data };
     userSessions[userId] = session;
 
-    let finalResponseText = responseText;
+    let responseText = '';
 
-    // 모든 정보가 수집되었는지 최종 확인
-    if (isComplete || (session.sex && session.age_month !== null && session.height_cm && session.weight_kg)) {
-      const { sex, age_month, height_cm, weight_kg } = session;
-      const ageKey = String(age_month);
-      const heightLMS = lmsData[sex]?.height?.[ageKey];
-      const weightLMS = lmsData[sex]?.weight?.[ageKey];
+    // [구조 개선] 2. 결정된 행동(action)에 따라 응답 생성
+    switch (decision.action) {
+      case 'greet':
+        responseText = '안녕하세요! 우리 아이 성장 발달, 저 닥터 라이키에게 편하게 물어보세요. 아이의 성별과 나이부터 알려주시겠어요?';
+        break;
 
-      if (age_month < 0 || age_month > 227 || !heightLMS || !weightLMS) {
-        finalResponseText = `죄송합니다. 입력해주신 ${age_month}개월에 대한 성장 데이터가 없거나, 나이가 범위를 벗어났습니다. 나이를 다시 확인해주세요.`;
-        session.age_month = null; // 오류 데이터 초기화
-      } else {
-        const heightPercentile = calculatePercentile(height_cm, heightLMS);
-        const weightPercentile = calculatePercentile(weight_kg, weightLMS);
+      case 'confirm_and_ask_next':
+      case 'ask_for_missing_info':
+        let missingField = '';
+        if (session.sex === null) missingField = '성별';
+        else if (session.age_month === null) missingField = '나이(개월)';
+        else if (session.height_cm === null) missingField = '키(cm)';
+        else if (session.weight_kg === null) missingField = '몸무게(kg)';
 
-        const reportPrompt = `
-          You are 'Dr. Likey', a friendly and professional AI pediatrician. Create a comprehensive growth analysis report for a parent based on the provided data. Use a structured, empathetic, and clear tone in Korean.
-
-          **Child's Data:**
-          - Sex: ${sex === 'male' ? 'Male' : 'Female'}
-          - Age: ${age_month} months
-          - Height: ${height_cm} cm (Percentile: ${heightPercentile}%)
-          - Weight: ${weight_kg} kg (Percentile: ${weightPercentile}%)
-
-          **Report Generation Instructions:**
-          1.  Start with a warm, concluding statement like "모든 정보가 확인되어 우리 아이의 성장 발달 리포트를 정리해드렸어요."
-          2.  Structure the report with these markdown headers: \`[성장 발달 요약]\`, \`[상세 분석]\`, \`[의료진 조언]\`.
-          3.  In \`[상세 분석]\`, explain the percentiles clearly.
-          4.  In \`[의료진 조언]\`, provide general, positive advice.
-          5.  Add this mandatory disclaimer at the very end: \`※ 이 결과는 2017 소아청소년 성장도표에 기반한 정보이며, 실제 의료적 진단을 대체할 수 없습니다. 정확한 진단 및 상담은 소아청소년과 전문의와 상의해주세요.\`
-          6.  Conclude by encouraging the user to start over by typing '다시 시작'.
+        const responseGenerationPrompt = `
+          You are 'Dr. Likey'. Generate a warm, natural response.
+          - **Previously collected data:** ${JSON.stringify(session)}
+          - **User's last message was:** "${userInput}"
+          - **Your next goal is to ask for:** "${missingField}"
+          
+          Acknowledge the information the user just provided, then smoothly ask for the next piece of information.
+          Example: If user just said "10개월", you could say "네, 10개월이군요! 이제 키는 몇 cm인지 알려주시겠어요?"
         `;
-        finalResponseText = await callOpenAI(reportPrompt);
-        userSessions[userId] = { sex: null, age_month: null, height_cm: null, weight_kg: null }; // 세션 초기화
-      }
+        responseText = await callOpenAI(responseGenerationPrompt);
+        break;
+
+      case 'generate_report':
+        const { sex, age_month, height_cm, weight_kg } = session;
+        const ageKey = String(age_month);
+        const heightLMS = lmsData[sex]?.height?.[ageKey];
+        const weightLMS = lmsData[sex]?.weight?.[ageKey];
+
+        if (age_month < 0 || age_month > 227 || !heightLMS || !weightLMS) {
+          responseText = `죄송합니다. 입력해주신 ${age_month}개월에 대한 성장 데이터가 없거나, 나이가 범위를 벗어났습니다. 나이를 다시 확인해주세요.`;
+          session.age_month = null; // 오류 데이터 초기화
+        } else {
+          const heightPercentile = calculatePercentile(height_cm, heightLMS);
+          const weightPercentile = calculatePercentile(weight_kg, weightLMS);
+
+          const reportPrompt = `
+            You are 'Dr. Likey'. Create a comprehensive growth analysis report in Korean.
+            - **Data:** Sex: ${sex}, Age: ${age_month}mo, Height: ${height_cm}cm (${heightPercentile}%), Weight: ${weight_kg}kg (${weightPercentile}%)
+            - **Instructions:** Start with "모든 정보가 확인되어 우리 아이의 성장 발달 리포트를 정리해드렸어요." Structure with headers: \`[성장 발달 요약]\`, \`[상세 분석]\`, \`[의료진 조언]\`. Explain percentiles. Give general, positive advice. Add the mandatory disclaimer: \`※ 이 결과는 2017 소아청소년 성장도표에 기반한 정보이며, 실제 의료적 진단을 대체할 수 없습니다. 정확한 진단 및 상담은 소아청소년과 전문의와 상의해주세요.\` Conclude by suggesting to type '다시 시작'.
+          `;
+          responseText = await callOpenAI(reportPrompt);
+          userSessions[userId] = { sex: null, age_month: null, height_cm: null, weight_kg: null }; // 세션 초기화
+        }
+        break;
+
+      case 'reset':
+        userSessions[userId] = { sex: null, age_month: null, height_cm: null, weight_kg: null };
+        responseText = '네, 처음부터 다시 시작하겠습니다. 무엇을 도와드릴까요?';
+        break;
+
+      default:
+        responseText = "죄송합니다, 어떻게 도와드려야 할지 잘 모르겠어요. 아이의 성별, 나이, 키, 몸무게 정보를 알려주시겠어요?";
     }
     
     res.json({
       version: '2.0',
       template: {
-        outputs: [{ simpleText: { text: finalResponseText } }],
+        outputs: [{ simpleText: { text: responseText } }],
       },
     });
 
   } catch (error) {
-    console.error('스킬 처리 중 심각한 오류 발생:', error.message, error.stack);
+    console.error('스킬 처리 중 심각한 오류 발생:', error);
     res.status(500).json({
       version: '2.0',
       template: {
