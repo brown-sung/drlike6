@@ -48,7 +48,7 @@ async function callOpenAI(prompt, isJsonMode = false) {
   const body = {
     model: 'gpt-4o',
     messages: [{ role: 'system', content: 'You are a helpful and empathetic AI assistant named Dr. Likey, specializing in pediatric growth analysis. Your primary language is Korean.' }, { role: 'user', content: prompt }],
-    temperature: 0.5, // 일관된 JSON 출력을 위해 온도를 약간 낮춤
+    temperature: 0.3, // 일관된 JSON 출력을 위해 온도를 더 낮춤
   };
 
   if (isJsonMode) {
@@ -98,38 +98,34 @@ app.post('/skill', async (req, res) => {
   let session = userSessions[userId] || { sex: null, age_month: null, height_cm: null, weight_kg: null };
 
   try {
-    // [구조 개선] 1. AI 분석가: 다음에 할 행동과 데이터를 결정
+    // [프롬프트 개선] 1. AI 분석가: 모든 지시사항을 한글로 변경
     const decisionPrompt = `
-      You are an intelligent "router" for a pediatric chatbot. Your job is to analyze the user's message and the current data, then decide the next logical action.
+      너는 소아과 챗봇의 지능형 '라우터'야. 사용자의 메시지와 현재 데이터를 분석해서, 다음에 할 논리적인 행동을 결정해야 해.
 
-      **Current Data (Session):**
+      **현재 데이터 (세션):**
       ${JSON.stringify(session)}
 
-      **User's Message:**
+      **사용자 메시지:**
       "${userInput}"
 
-      **Your Task: Decide the next action and extract data.**
-      1.  **Analyze Intent:** Is the user greeting, providing data, asking to reset, or something else?
-      2.  **Extract Data:** Pull \`sex\`, \`age_month\`, \`height_cm\`, \`weight_kg\` from the user's message. Assume units (e.g., if height is missing and user says "100", that is 100cm).
-      3.  **Determine Action:**
-          - If the user is just greeting: \`"action": "greet"\`
-          - If new data was provided but more is needed: \`"action": "confirm_and_ask_next"\`
-          - If no new data was provided and some is missing: \`"action": "ask_for_missing_info"\`
-          - If all data is now complete: \`"action": "generate_report"\`
-          - If user wants to reset: \`"action": "reset"\`
-      4.  **Output:** Respond ONLY with a valid JSON object in the following format.
+      **너의 임무: 다음 행동을 결정하고 데이터를 추출해라.**
+      1.  **의도 분석**: 사용자가 인사를 하는지, 정보를 제공하는지, 초기화를 원하는지 등을 한국어 맥락에 맞게 분석해.
+      2.  **데이터 추출**: 사용자 메시지에서 \`sex\`, \`age_month\`, \`height_cm\`, \`weight_kg\`를 추출해. 단위가 없으면 추론해야 해 (예: 키를 묻는 상황에서 "100"이라고 답하면 100cm임).
+      3.  **행동 결정**:
+          - 사용자가 "안녕", "안녕하세요" 등 순수한 인사를 할 경우: \`"action": "greet"\`
+          - 새로운 정보가 들어왔지만, 추가 정보가 더 필요한 경우: \`"action": "confirm_and_ask_next"\`
+          - 새 정보는 없는데, 누락된 정보가 있는 경우: \`"action": "ask_for_missing_info"\`
+          - 모든 정보가 수집된 경우: \`"action": "generate_report"\`
+          - 사용자가 "다시", "초기화" 등 리셋을 원할 경우: \`"action": "reset"\`
+      4.  **출력**: 반드시 다음 형식의 유효한 JSON 객체 하나만 다른 설명 없이 응답해야 해.
 
-      **Example 1 (Greeting):**
-      User says "안녕하세요".
-      Output: \`{"action": "greet", "data": {}}\`
+      **예시 1 (인사):**
+      사용자가 "안녕하세요" 라고 말함.
+      출력: \`{"action": "greet", "data": {}}\`
 
-      **Example 2 (Providing data):**
-      Session has \`{"sex": "male", "age_month": null, ...}\`. User says "10개월".
-      Output: \`{"action": "confirm_and_ask_next", "data": {"age_month": 10}}\`
-      
-      **Example 3 (All data complete):**
-      Session has \`{"sex": "male", "age_month": 10, "height_cm": 100, "weight_kg": null}\`. User says "15kg".
-      Output: \`{"action": "generate_report", "data": {"weight_kg": 15}}\`
+      **예시 2 (정보 제공):**
+      세션에 \`{"sex": "male", "age_month": null, ...}\`가 있고, 사용자가 "10개월" 이라고 말함.
+      출력: \`{"action": "confirm_and_ask_next", "data": {"age_month": 10}}\`
     `;
     
     const rawDecision = await callOpenAI(decisionPrompt, true);
@@ -155,14 +151,15 @@ app.post('/skill', async (req, res) => {
         else if (session.height_cm === null) missingField = '키(cm)';
         else if (session.weight_kg === null) missingField = '몸무게(kg)';
 
+        // [프롬프트 개선] 응답 생성 프롬프트도 한글로 변경
         const responseGenerationPrompt = `
-          You are 'Dr. Likey'. Generate a warm, natural response.
-          - **Previously collected data:** ${JSON.stringify(session)}
-          - **User's last message was:** "${userInput}"
-          - **Your next goal is to ask for:** "${missingField}"
+          너는 '닥터 라이키'야. 따뜻하고 자연스러운 한국어 응답을 생성해야 해.
+          - **이전에 수집된 정보:** ${JSON.stringify(session)}
+          - **사용자의 마지막 말:** "${userInput}"
+          - **너의 다음 목표:** "${missingField}"에 대해 질문하기.
           
-          Acknowledge the information the user just provided, then smoothly ask for the next piece of information.
-          Example: If user just said "10개월", you could say "네, 10개월이군요! 이제 키는 몇 cm인지 알려주시겠어요?"
+          사용자가 방금 제공한 정보를 먼저 인정하고 확인해준 뒤(예: "네, 10개월이군요!"), 부드럽게 다음 정보를 물어봐.
+          다른 부연 설명 없이, 실제 사용자에게 보낼 응답 메시지만 생성해줘.
         `;
         responseText = await callOpenAI(responseGenerationPrompt);
         break;
@@ -181,9 +178,9 @@ app.post('/skill', async (req, res) => {
           const weightPercentile = calculatePercentile(weight_kg, weightLMS);
 
           const reportPrompt = `
-            You are 'Dr. Likey'. Create a comprehensive growth analysis report in Korean.
-            - **Data:** Sex: ${sex}, Age: ${age_month}mo, Height: ${height_cm}cm (${heightPercentile}%), Weight: ${weight_kg}kg (${weightPercentile}%)
-            - **Instructions:** Start with "모든 정보가 확인되어 우리 아이의 성장 발달 리포트를 정리해드렸어요." Structure with headers: \`[성장 발달 요약]\`, \`[상세 분석]\`, \`[의료진 조언]\`. Explain percentiles. Give general, positive advice. Add the mandatory disclaimer: \`※ 이 결과는 2017 소아청소년 성장도표에 기반한 정보이며, 실제 의료적 진단을 대체할 수 없습니다. 정확한 진단 및 상담은 소아청소년과 전문의와 상의해주세요.\` Conclude by suggesting to type '다시 시작'.
+            너는 '닥터 라이키'야. 아래 데이터를 바탕으로 전문적이고 이해하기 쉬운 성장 분석 리포트를 한국어로 작성해줘.
+            - **아이 정보:** 성별: ${sex}, 나이: ${age_month}개월, 키: ${height_cm}cm (${heightPercentile}%), 몸무게: ${weight_kg}kg (${weightPercentile}%)
+            - **작성 지침:** "모든 정보가 확인되어 우리 아이의 성장 발달 리포트를 정리해드렸어요."로 시작해줘. \`[성장 발달 요약]\`, \`[상세 분석]\`, \`[의료진 조언]\` 헤더를 사용해서 구조적으로 작성해줘. 백분위의 의미를 명확히 설명하고, 일반적이고 긍정적인 조언을 해줘. 마지막에는 반드시 다음 주의 문구를 포함해줘: \`※ 이 결과는 2017 소아청소년 성장도표에 기반한 정보이며, 실제 의료적 진단을 대체할 수 없습니다. 정확한 진단 및 상담은 소아청소년과 전문의와 상의해주세요.\` 마지막으로 '다시 시작'을 입력하면 새로 상담할 수 있다고 안내해줘.
           `;
           responseText = await callOpenAI(reportPrompt);
           userSessions[userId] = { sex: null, age_month: null, height_cm: null, weight_kg: null }; // 세션 초기화
