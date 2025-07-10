@@ -47,8 +47,8 @@ async function callOpenAI(prompt, isJsonMode = false) {
 
   const body = {
     model: 'gpt-4o',
-    messages: [{ role: 'system', content: 'You are a helpful and empathetic AI assistant named Dr. Likey, specializing in pediatric growth analysis. Your primary language is Korean.' }, { role: 'user', content: prompt }],
-    temperature: 0.3, // 일관된 JSON 출력을 위해 온도를 더 낮춤
+    messages: [{ role: 'system', content: 'You are a helpful and empathetic AI assistant named Dr.LIKE, specializing in pediatric growth analysis. Your primary language is Korean.' }, { role: 'user', content: prompt }],
+    temperature: 0.3,
   };
 
   if (isJsonMode) {
@@ -83,7 +83,7 @@ app.get('/', (req, res) => {
     <head><meta charset="UTF-8"><title>서버 실행 중</title></head>
     <body style="font-family: sans-serif; text-align: center; padding: 40px;">
       <h1 style="color: #4CAF50;">✅ 서버가 정상적으로 실행 중입니다</h1>
-      <p>성장 발달 챗봇 서버가 성공적으로 배포되었습니다.</p>
+      <p>성장 발달 챗봇 '닥터라이크'가 성공적으로 배포되었습니다.</p>
     </body>
     </html>
   `);
@@ -95,12 +95,13 @@ app.post('/skill', async (req, res) => {
   const userId = req.body.userRequest.user.id;
   const userInput = req.body.userRequest.utterance;
 
-  let session = userSessions[userId] || { sex: null, age_month: null, height_cm: null, weight_kg: null };
+  // [수정됨] 머리둘레 필드 추가
+  let session = userSessions[userId] || { sex: null, age_month: null, height_cm: null, weight_kg: null, head_circumference_cm: null };
 
   try {
-    // [프롬프트 개선] 1. AI 분석가: 모든 지시사항을 한글로 변경
+    // [구조 개선] 1. AI 분석가: 다음에 할 행동과 데이터를 결정
     const decisionPrompt = `
-      너는 소아과 챗봇의 지능형 '라우터'야. 사용자의 메시지와 현재 데이터를 분석해서, 다음에 할 논리적인 행동을 결정해야 해.
+      너는 '닥터라이크' 챗봇의 핵심 두뇌야. 사용자의 메시지와 현재 대화 상태를 분석해서, 다음에 할 가장 논리적인 행동을 결정해야 해.
 
       **현재 데이터 (세션):**
       ${JSON.stringify(session)}
@@ -108,92 +109,138 @@ app.post('/skill', async (req, res) => {
       **사용자 메시지:**
       "${userInput}"
 
+      **최소 정보 규칙:**
+      - **필수 정보 (반드시 필요):** \`sex\`, \`age_month\`
+      - **선택 정보 (셋 중 하나 이상 필요):** \`height_cm\`, \`weight_kg\`, \`head_circumference_cm\`
+
       **너의 임무: 다음 행동을 결정하고 데이터를 추출해라.**
-      1.  **의도 분석**: 사용자가 인사를 하는지, 정보를 제공하는지, 초기화를 원하는지 등을 한국어 맥락에 맞게 분석해.
-      2.  **데이터 추출**: 사용자 메시지에서 \`sex\`, \`age_month\`, \`height_cm\`, \`weight_kg\`를 추출해. 단위가 없으면 추론해야 해 (예: 키를 묻는 상황에서 "100"이라고 답하면 100cm임).
+      1.  **의도 분석**: 사용자가 인사를 하는지, 정보를 제공하는지, 질문을 건너뛰려 하는지("몰라요", "패스"), 주제와 무관한 질문을 하는지, 초기화를 원하는지 등을 한국어 맥락에 맞게 분석해.
+      2.  **데이터 추출**: 사용자 메시지에서 \`sex\`, \`age_month\`, \`height_cm\`, \`weight_kg\`, \`head_circumference_cm\`를 추출해.
       3.  **행동 결정**:
-          - 사용자가 "안녕", "안녕하세요" 등 순수한 인사를 할 경우: \`"action": "greet"\`
-          - 새로운 정보가 들어왔지만, 추가 정보가 더 필요한 경우: \`"action": "confirm_and_ask_next"\`
-          - 새 정보는 없는데, 누락된 정보가 있는 경우: \`"action": "ask_for_missing_info"\`
-          - 모든 정보가 수집된 경우: \`"action": "generate_report"\`
+          - 단순 인사일 경우: \`"action": "greet"\`
+          - 주제와 무관한 질문일 경우: \`"action": "handle_off_topic"\`
+          - **사용자가 질문을 건너뛰려고 할 경우**: \`"action": "handle_skip"\`
+          - 새 정보가 들어왔지만, 추가 정보가 더 필요한 경우: \`"action": "ask_for_info"\`
+          - **최소 정보 규칙을 만족하여 리포트 생성이 가능한 경우**: \`"action": "generate_report"\`
           - 사용자가 "다시", "초기화" 등 리셋을 원할 경우: \`"action": "reset"\`
       4.  **출력**: 반드시 다음 형식의 유효한 JSON 객체 하나만 다른 설명 없이 응답해야 해.
 
-      **예시 1 (인사):**
-      사용자가 "안녕하세요" 라고 말함.
-      출력: \`{"action": "greet", "data": {}}\`
-
-      **예시 2 (정보 제공):**
+      **예시 (정보 제공):**
       세션에 \`{"sex": "male", "age_month": null, ...}\`가 있고, 사용자가 "10개월" 이라고 말함.
-      출력: \`{"action": "confirm_and_ask_next", "data": {"age_month": 10}}\`
+      출력: \`{"action": "ask_for_info", "data": {"age_month": 10}}\`
     `;
     
     const rawDecision = await callOpenAI(decisionPrompt, true);
     const decision = JSON.parse(rawDecision);
 
     // 세션 업데이트
-    session = { ...session, ...decision.data };
+    if (decision.data) {
+        for (const key in decision.data) {
+            if (decision.data[key] !== null) {
+                session[key] = decision.data[key];
+            }
+        }
+    }
     userSessions[userId] = session;
-
+    
     let responseText = '';
 
-    // [구조 개선] 2. 결정된 행동(action)에 따라 응답 생성
+    // 결정된 행동(action)에 따라 응답 생성
     switch (decision.action) {
       case 'greet':
-        responseText = '안녕하세요! 우리 아이 성장 발달, 저 닥터 라이키에게 편하게 물어보세요. 아이의 성별과 나이부터 알려주시겠어요?';
+        responseText = '안녕하세요! 우리 아이 성장 발달, 저 닥터라이크에게 편하게 물어보세요. 아이의 성별과 나이부터 알려주시겠어요?';
+        break;
+        
+      case 'handle_off_topic':
+        const offTopicPrompt = `
+            너는 '닥터라이크'야. 사용자가 너의 역할과 관련 없는 질문을 했어.
+            - **사용자 질문:** "${userInput}"
+            
+            너의 역할("소아청소년 성장 발달 AI")에 대해 간단히 소개하고, 자연스럽게 성장 발달에 대한 질문을 유도하는 짧은 답변을 생성해줘.
+        `;
+        responseText = await callOpenAI(offTopicPrompt);
         break;
 
-      case 'confirm_and_ask_next':
-      case 'ask_for_missing_info':
-        let missingField = '';
-        if (session.sex === null) missingField = '성별';
-        else if (session.age_month === null) missingField = '나이(개월)';
-        else if (session.height_cm === null) missingField = '키(cm)';
-        else if (session.weight_kg === null) missingField = '몸무게(kg)';
+      case 'handle_skip':
+        // 선택 정보가 하나라도 있는지 확인
+        const hasOptionalInfo = session.height_cm || session.weight_kg || session.head_circumference_cm;
+        if (hasOptionalInfo) {
+            // 건너뛰기 가능
+            decision.action = 'ask_for_info'; // 다음 정보를 묻는 로직으로 넘어감
+        } else {
+            // 건너뛰기 불가능
+            responseText = "정확한 리포트를 위해 키, 몸무게, 머리둘레 중 확인하고 싶은 정보 한 가지는 꼭 필요해요. 가장 궁금하신 항목으로 알려주시겠어요?";
+            break; // 여기서 응답하고 종료
+        }
+        // 이어서 'ask_for_info' 케이스 실행 (break 없음)
 
-        // [프롬프트 개선] 응답 생성 프롬프트도 한글로 변경
-        const responseGenerationPrompt = `
-          너는 '닥터 라이키'야. 따뜻하고 자연스러운 한국어 응답을 생성해야 해.
-          - **이전에 수집된 정보:** ${JSON.stringify(session)}
-          - **사용자의 마지막 말:** "${userInput}"
-          - **너의 다음 목표:** "${missingField}"에 대해 질문하기.
-          
-          사용자가 방금 제공한 정보를 먼저 인정하고 확인해준 뒤(예: "네, 10개월이군요!"), 부드럽게 다음 정보를 물어봐.
-          다른 부연 설명 없이, 실제 사용자에게 보낼 응답 메시지만 생성해줘.
-        `;
-        responseText = await callOpenAI(responseGenerationPrompt);
+      case 'ask_for_info':
+        let missingField = '';
+        let promptForNext = '';
+
+        // 필수 정보 확인
+        if (session.sex === null) {
+            missingField = '성별';
+            promptForNext = `네, 반갑습니다! 아이의 성별을 알려주시겠어요?`;
+        } else if (session.age_month === null) {
+            missingField = '나이(개월)';
+            promptForNext = `네, ${session.sex === 'male' ? '남자' : '여자'}아이군요! 이제 아이의 나이를 개월 수로 알려주세요.`;
+        } else if (!session.height_cm && !session.weight_kg && !session.head_circumference_cm) {
+            // 선택 정보가 하나도 없을 때 안내
+            missingField = '키, 몸무게, 또는 머리둘레';
+            promptForNext = `네, ${session.age_month}개월이군요. 정확한 분석을 위해 키, 몸무게, 머리둘레 중 확인하고 싶은 정보를 한 가지 이상 알려주시겠어요?`;
+        } else {
+            // 추가 선택 정보 질문
+            if (session.height_cm === null) missingField = '키(cm)';
+            else if (session.weight_kg === null) missingField = '몸무게(kg)';
+            else if (session.head_circumference_cm === null) missingField = '머리둘레(cm)';
+            
+            const responseGenerationPrompt = `
+              너는 '닥터라이크'야. 따뜻하고 자연스러운 한국어 응답을 생성해야 해.
+              - **이전에 수집된 정보:** ${JSON.stringify(session)}
+              - **사용자의 마지막 말:** "${userInput}"
+              - **너의 다음 목표:** "${missingField}"에 대해 질문하기.
+              
+              사용자가 방금 제공한 정보를 먼저 인정하고 확인해준 뒤(예: "네, 키는 100cm이군요!"), 부드럽게 다음 정보를 물어봐. 만약 사용자가 정보를 건너뛰었다면("네, 알겠습니다.")라고 한 뒤 다음 질문을 해.
+            `;
+            promptForNext = await callOpenAI(responseGenerationPrompt);
+        }
+        responseText = promptForNext;
         break;
 
       case 'generate_report':
-        const { sex, age_month, height_cm, weight_kg } = session;
+        const { sex, age_month, height_cm, weight_kg, head_circumference_cm } = session;
+        
+        let reportData = { 성별: sex, 나이: `${age_month}개월` };
         const ageKey = String(age_month);
-        const heightLMS = lmsData[sex]?.height?.[ageKey];
-        const weightLMS = lmsData[sex]?.weight?.[ageKey];
 
-        if (age_month < 0 || age_month > 227 || !heightLMS || !weightLMS) {
-          responseText = `죄송합니다. 입력해주신 ${age_month}개월에 대한 성장 데이터가 없거나, 나이가 범위를 벗어났습니다. 나이를 다시 확인해주세요.`;
-          session.age_month = null; // 오류 데이터 초기화
-        } else {
-          const heightPercentile = calculatePercentile(height_cm, heightLMS);
-          const weightPercentile = calculatePercentile(weight_kg, weightLMS);
-
-          const reportPrompt = `
-            너는 '닥터 라이키'야. 아래 데이터를 바탕으로 전문적이고 이해하기 쉬운 성장 분석 리포트를 한국어로 작성해줘.
-            - **아이 정보:** 성별: ${sex}, 나이: ${age_month}개월, 키: ${height_cm}cm (${heightPercentile}%), 몸무게: ${weight_kg}kg (${weightPercentile}%)
-            - **작성 지침:** "모든 정보가 확인되어 우리 아이의 성장 발달 리포트를 정리해드렸어요."로 시작해줘. \`[성장 발달 요약]\`, \`[상세 분석]\`, \`[의료진 조언]\` 헤더를 사용해서 구조적으로 작성해줘. 백분위의 의미를 명확히 설명하고, 일반적이고 긍정적인 조언을 해줘. 마지막에는 반드시 다음 주의 문구를 포함해줘: \`※ 이 결과는 2017 소아청소년 성장도표에 기반한 정보이며, 실제 의료적 진단을 대체할 수 없습니다. 정확한 진단 및 상담은 소아청소년과 전문의와 상의해주세요.\` 마지막으로 '다시 시작'을 입력하면 새로 상담할 수 있다고 안내해줘.
-          `;
-          responseText = await callOpenAI(reportPrompt);
-          userSessions[userId] = { sex: null, age_month: null, height_cm: null, weight_kg: null }; // 세션 초기화
+        if(height_cm) {
+            const lms = lmsData[sex]?.height?.[ageKey];
+            reportData['키'] = lms ? `${height_cm}cm (상위 ${calculatePercentile(height_cm, lms)}%)` : `${height_cm}cm (데이터 없음)`;
         }
+        if(weight_kg) {
+            const lms = lmsData[sex]?.weight?.[ageKey];
+            reportData['몸무게'] = lms ? `${weight_kg}kg (상위 ${calculatePercentile(weight_kg, lms)}%)` : `${weight_kg}kg (데이터 없음)`;
+        }
+        // 머리둘레 데이터는 현재 제공된 CSV에 없으므로, 있다면 추가하는 로직만 구현
+        // if(head_circumference_cm) { ... }
+
+        const reportPrompt = `
+          너는 '닥터라이크'야. 아래 데이터를 바탕으로 전문적이고 이해하기 쉬운 성장 분석 리포트를 한국어로 작성해줘.
+          - **아이 정보:** ${JSON.stringify(reportData)}
+          - **작성 지침:** "모든 정보가 확인되어 우리 아이의 성장 발달 리포트를 정리해드렸어요."로 시작해줘. 제공된 정보만으로 리포트를 작성해야 해. \`[성장 발달 요약]\`, \`[상세 분석]\`, \`[의료진 조언]\` 헤더를 사용해서 구조적으로 작성해줘. 마지막에는 반드시 다음 주의 문구를 포함해줘: \`※ 이 결과는 2017 소아청소년 성장도표에 기반한 정보이며, 실제 의료적 진단을 대체할 수 없습니다. 정확한 진단 및 상담은 소아청소년과 전문의와 상의해주세요.\` 마지막으로 "다른 아이의 성장 발달이 궁금하시거나, 다시 상담을 시작하시려면 '다시 시작'이라고 말씀해주세요." 라고 안내해줘.
+        `;
+        responseText = await callOpenAI(reportPrompt);
+        userSessions[userId] = null; // 세션 초기화
         break;
 
       case 'reset':
-        userSessions[userId] = { sex: null, age_month: null, height_cm: null, weight_kg: null };
+        userSessions[userId] = null;
         responseText = '네, 처음부터 다시 시작하겠습니다. 무엇을 도와드릴까요?';
         break;
 
       default:
-        responseText = "죄송합니다, 어떻게 도와드려야 할지 잘 모르겠어요. 아이의 성별, 나이, 키, 몸무게 정보를 알려주시겠어요?";
+        responseText = "죄송합니다, 어떻게 도와드려야 할지 잘 모르겠어요. 아이의 성별, 나이, 키, 몸무게, 머리둘레 정보를 알려주시겠어요?";
     }
     
     res.json({
