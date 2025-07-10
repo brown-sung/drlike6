@@ -95,11 +95,10 @@ app.post('/skill', async (req, res) => {
   const userId = req.body.userRequest.user.id;
   const userInput = req.body.userRequest.utterance;
 
-  // [수정됨] 머리둘레 필드 추가
   let session = userSessions[userId] || { sex: null, age_month: null, height_cm: null, weight_kg: null, head_circumference_cm: null };
 
   try {
-    // [구조 개선] 1. AI 분석가: 다음에 할 행동과 데이터를 결정
+    // [프롬프트 개선] 1. AI 분석가: 즉시 분석 규칙 강화
     const decisionPrompt = `
       너는 '닥터라이크' 챗봇의 핵심 두뇌야. 사용자의 메시지와 현재 대화 상태를 분석해서, 다음에 할 가장 논리적인 행동을 결정해야 해.
 
@@ -114,20 +113,19 @@ app.post('/skill', async (req, res) => {
       - **선택 정보 (셋 중 하나 이상 필요):** \`height_cm\`, \`weight_kg\`, \`head_circumference_cm\`
 
       **너의 임무: 다음 행동을 결정하고 데이터를 추출해라.**
-      1.  **의도 분석**: 사용자가 인사를 하는지, 정보를 제공하는지, 질문을 건너뛰려 하는지("몰라요", "패스"), 주제와 무관한 질문을 하는지, 초기화를 원하는지 등을 한국어 맥락에 맞게 분석해.
+      1.  **의도 분석**: 사용자가 인사를 하는지, 정보를 제공하는지, 질문을 건너뛰려 하는지("몰라요", "패스"), 분석을 요청하는지("분석해줘"), 주제와 무관한 질문을 하는지, 초기화를 원하는지 등을 분석해.
       2.  **데이터 추출**: 사용자 메시지에서 \`sex\`, \`age_month\`, \`height_cm\`, \`weight_kg\`, \`head_circumference_cm\`를 추출해.
       3.  **행동 결정**:
+          - **가장 중요한 규칙**: 사용자가 "분석해줘"라고 말하거나, **'최소 정보 규칙'이 이미 충족된 상태에서** 정보를 건너뛰려 하거나, 더 이상 줄 정보가 없다고 말하면, 행동을 반드시 \`"action": "generate_report"\` 로 결정해야 해.
           - 단순 인사일 경우: \`"action": "greet"\`
           - 주제와 무관한 질문일 경우: \`"action": "handle_off_topic"\`
-          - **사용자가 질문을 건너뛰려고 할 경우**: \`"action": "handle_skip"\`
-          - 새 정보가 들어왔지만, 추가 정보가 더 필요한 경우: \`"action": "ask_for_info"\`
-          - **최소 정보 규칙을 만족하여 리포트 생성이 가능한 경우**: \`"action": "generate_report"\`
+          - 그 외, 추가 정보가 필요한 모든 경우: \`"action": "ask_for_info"\`
           - 사용자가 "다시", "초기화" 등 리셋을 원할 경우: \`"action": "reset"\`
       4.  **출력**: 반드시 다음 형식의 유효한 JSON 객체 하나만 다른 설명 없이 응답해야 해.
 
-      **예시 (정보 제공):**
-      세션에 \`{"sex": "male", "age_month": null, ...}\`가 있고, 사용자가 "10개월" 이라고 말함.
-      출력: \`{"action": "ask_for_info", "data": {"age_month": 10}}\`
+      **예시 (즉시 분석):**
+      세션에 \`{"sex": "male", "age_month": 10, "height_cm": 100, "weight_kg": null, ...}\`가 있고, 사용자가 "몸무게는 몰라요" 라고 말함.
+      출력: \`{"action": "generate_report", "data": {"weight_kg": "skipped"}}\`
     `;
     
     const rawDecision = await callOpenAI(decisionPrompt, true);
@@ -161,51 +159,18 @@ app.post('/skill', async (req, res) => {
         responseText = await callOpenAI(offTopicPrompt);
         break;
 
-      case 'handle_skip':
-        // 선택 정보가 하나라도 있는지 확인
-        const hasOptionalInfo = session.height_cm || session.weight_kg || session.head_circumference_cm;
-        if (hasOptionalInfo) {
-            // 건너뛰기 가능
-            decision.action = 'ask_for_info'; // 다음 정보를 묻는 로직으로 넘어감
-        } else {
-            // 건너뛰기 불가능
-            responseText = "정확한 리포트를 위해 키, 몸무게, 머리둘레 중 확인하고 싶은 정보 한 가지는 꼭 필요해요. 가장 궁금하신 항목으로 알려주시겠어요?";
-            break; // 여기서 응답하고 종료
-        }
-        // 이어서 'ask_for_info' 케이스 실행 (break 없음)
-
       case 'ask_for_info':
-        let missingField = '';
-        let promptForNext = '';
-
-        // 필수 정보 확인
-        if (session.sex === null) {
-            missingField = '성별';
-            promptForNext = `네, 반갑습니다! 아이의 성별을 알려주시겠어요?`;
-        } else if (session.age_month === null) {
-            missingField = '나이(개월)';
-            promptForNext = `네, ${session.sex === 'male' ? '남자' : '여자'}아이군요! 이제 아이의 나이를 개월 수로 알려주세요.`;
-        } else if (!session.height_cm && !session.weight_kg && !session.head_circumference_cm) {
-            // 선택 정보가 하나도 없을 때 안내
-            missingField = '키, 몸무게, 또는 머리둘레';
-            promptForNext = `네, ${session.age_month}개월이군요. 정확한 분석을 위해 키, 몸무게, 머리둘레 중 확인하고 싶은 정보를 한 가지 이상 알려주시겠어요?`;
-        } else {
-            // 추가 선택 정보 질문
-            if (session.height_cm === null) missingField = '키(cm)';
-            else if (session.weight_kg === null) missingField = '몸무게(kg)';
-            else if (session.head_circumference_cm === null) missingField = '머리둘레(cm)';
-            
-            const responseGenerationPrompt = `
-              너는 '닥터라이크'야. 따뜻하고 자연스러운 한국어 응답을 생성해야 해.
-              - **이전에 수집된 정보:** ${JSON.stringify(session)}
-              - **사용자의 마지막 말:** "${userInput}"
-              - **너의 다음 목표:** "${missingField}"에 대해 질문하기.
-              
-              사용자가 방금 제공한 정보를 먼저 인정하고 확인해준 뒤(예: "네, 키는 100cm이군요!"), 부드럽게 다음 정보를 물어봐. 만약 사용자가 정보를 건너뛰었다면("네, 알겠습니다.")라고 한 뒤 다음 질문을 해.
-            `;
-            promptForNext = await callOpenAI(responseGenerationPrompt);
-        }
-        responseText = promptForNext;
+        const hasOptionalInfo = session.height_cm || session.weight_kg || session.head_circumference_cm;
+        const responseGenerationPrompt = `
+          너는 '닥터라이크'야. 따뜻하고 자연스러운 한국어 응답을 생성해야 해.
+          - **현재까지 수집된 정보:** ${JSON.stringify(session)}
+          - **사용자의 마지막 말:** "${userInput}"
+          
+          **상황에 맞는 응답 생성:**
+          - **만약 선택 정보가 하나도 없다면,** 사용자에게 최소 정보 규칙을 안내해줘. (예: "네, ${session.age_month}개월이군요. 정확한 분석을 위해 키, 몸무게, 머리둘레 중 확인하고 싶은 정보를 한 가지 이상 알려주시겠어요?")
+          - **만약 선택 정보가 이미 있다면,** 사용자에게 추가 정보를 물어봐줘. (예: "네, 키는 100cm이군요! 혹시 몸무게도 알고 계시면 알려주시겠어요? 원치 않으시면 '분석해줘'라고 말씀해주세요.")
+        `;
+        responseText = await callOpenAI(responseGenerationPrompt);
         break;
 
       case 'generate_report':
@@ -214,16 +179,18 @@ app.post('/skill', async (req, res) => {
         let reportData = { 성별: sex, 나이: `${age_month}개월` };
         const ageKey = String(age_month);
 
-        if(height_cm) {
+        if(height_cm && height_cm !== 'skipped') {
             const lms = lmsData[sex]?.height?.[ageKey];
             reportData['키'] = lms ? `${height_cm}cm (상위 ${calculatePercentile(height_cm, lms)}%)` : `${height_cm}cm (데이터 없음)`;
         }
-        if(weight_kg) {
+        if(weight_kg && weight_kg !== 'skipped') {
             const lms = lmsData[sex]?.weight?.[ageKey];
             reportData['몸무게'] = lms ? `${weight_kg}kg (상위 ${calculatePercentile(weight_kg, lms)}%)` : `${weight_kg}kg (데이터 없음)`;
         }
-        // 머리둘레 데이터는 현재 제공된 CSV에 없으므로, 있다면 추가하는 로직만 구현
-        // if(head_circumference_cm) { ... }
+        if(head_circumference_cm && head_circumference_cm !== 'skipped') {
+            // 머리둘레 데이터는 현재 제공된 CSV에 없으므로, 백분위 계산은 제외
+            reportData['머리둘레'] = `${head_circumference_cm}cm`;
+        }
 
         const reportPrompt = `
           너는 '닥터라이크'야. 아래 데이터를 바탕으로 전문적이고 이해하기 쉬운 성장 분석 리포트를 한국어로 작성해줘.
