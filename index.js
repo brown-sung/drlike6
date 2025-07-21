@@ -1,4 +1,4 @@
-// index.js
+// index.js (최종 수정본)
 const express = require('express');
 const { jStat } = require('jstat');
 const lmsData = require('./lms_data.js');
@@ -8,17 +8,12 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const app = express();
 app.use(express.json());
 
-// --- 1. 설정: Gemini API 키 ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 console.log("LMS 데이터가 코드를 통해 로드되었습니다.");
 
-// --- 2. 대화 상태 저장을 위한 메모리 내 세션 ---
 const userSessions = {};
 
-/**
- * LMS 파라미터를 사용하여 주어진 값의 백분위를 계산합니다.
- */
 function calculatePercentile(value, lms) {
   if (!lms) return null;
   const { L, M, S } = lms;
@@ -29,22 +24,21 @@ function calculatePercentile(value, lms) {
     zScore = Math.log(value / M) / S;
   }
   const percentile = jStat.normal.cdf(zScore, 0, 1) * 100;
-  return parseFloat(percentile.toFixed(1)); // 소수점 한 자리로 변경
+  return parseFloat(percentile.toFixed(1));
 }
 
 /**
- * Gemini API를 호출하여 JSON 응답을 가져옵니다. (정보 추출 전용)
+ * [프롬프트 최적화] 복잡한 규칙을 포함한 정보 추출 및 행동 결정 전용 Gemini 호출
  */
 async function callGeminiForDecision(session, userInput) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY가 설정되지 않았습니다.');
-  }
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY가 설정되지 않았습니다.');
+  
   const model = 'gemini-1.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
   
-  // [프롬프트 최적화] 매우 간결하고 명확한 지시사항으로 변경
+  // 사용자의 다양한 입력을 처리하기 위한 초경량/고속 프롬프트
   const decisionPrompt = `
-    Analyze the user's message based on the current session data. Decide the next action and extract specified data points.
+    Your task is to extract data from the user's message based on the session and decide an action.
 
     **Session Data:**
     ${JSON.stringify(session)}
@@ -52,16 +46,20 @@ async function callGeminiForDecision(session, userInput) {
     **User Message:**
     "${userInput}"
 
-    **Rules:**
-    1.  Extract \`sex\`, \`age_month\`, \`height_cm\`, \`weight_kg\`, \`head_circumference_cm\`.
-    2.  If user wants to reset ("다시", "초기화"), set action to "reset".
-    3.  If user provides info and required data (\`sex\`, \`age_month\`, and at least one of \`height_cm\`, \`weight_kg\`, \`head_circumference_cm\`) is complete, set action to "generate_report".
-    4.  If user asks to analyze ("분석해줘") and required data is met, set action to "generate_report".
-    5.  If user provides some info but more is needed, set action to "ask_for_info".
-    6.  If the message is a simple greeting, set action to "greet".
-    7.  Otherwise, set action to "ask_for_info".
+    **Extraction Rules:**
+    - \`sex\`: "남자" -> "male", "여자" -> "female".
+    - \`age_month\`: Convert years ("살", "세") to months (e.g., "3살" -> 36). If just a number, assume months.
+    - \`height_cm\`, \`weight_kg\`: If two numbers like "100, 15" are given, infer the larger is height and smaller is weight. Extract numbers even if units are present.
+    - An existing value in the session can be overwritten by new user input.
 
-    **Output:** Respond with a single, valid JSON object only. Example: \`{"action": "generate_report", "data": {"weight_kg": 8.5}}\`
+    **Action Rules:**
+    - "reset": If the user wants to start over ("다시", "초기화").
+    - "generate_report": If \`sex\`, \`age_month\`, and at least one of \`height_cm\` or \`weight_kg\` are present after extraction, OR if the user explicitly asks to "분석".
+    - "ask_for_info": If essential information is still missing.
+    - "greet": For simple greetings.
+
+    **Output:** Respond ONLY with a valid JSON object.
+    Example -> User: "우리 아들 3살인데 15키로야" -> Output: \`{"action": "ask_for_info", "data": {"sex": "male", "age_month": 36, "weight_kg": 15}}\`
   `;
 
   const body = {
@@ -70,6 +68,7 @@ async function callGeminiForDecision(session, userInput) {
       temperature: 0.0,
       response_mime_type: "application/json",
     },
+    // 시스템 메시지 대신 프롬프트에 모든 규칙을 통합하여 속도 최적화
   };
 
   const response = await fetch(url, {
@@ -91,12 +90,7 @@ async function callGeminiForDecision(session, userInput) {
 // 루트 경로 핸들러
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.status(200).send(`
-    <!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>서버 실행 중</title></head>
-    <body style="font-family: sans-serif; text-align: center; padding: 40px;">
-      <h1 style="color: #4CAF50;">✅ 서버가 정상적으로 실행 중입니다</h1>
-    </body></html>
-  `);
+  res.status(200).send('✅ 서버가 정상적으로 실행 중입니다');
 });
 
 // 카카오톡 스킬 API 엔드포인트
@@ -104,12 +98,14 @@ app.post('/skill', async (req, res) => {
   const userId = req.body.userRequest.user.id;
   const userInput = req.body.userRequest.utterance;
 
-  let session = userSessions[userId] || { sex: null, age_month: null, height_cm: null, weight_kg: null, head_circumference_cm: null };
+  // 머리둘레 삭제
+  let session = userSessions[userId] || { sex: null, age_month: null, height_cm: null, weight_kg: null };
 
   try {
     const rawDecision = await callGeminiForDecision(session, userInput);
     const decision = JSON.parse(rawDecision);
 
+    // AI가 추출한 데이터가 있으면 세션에 덮어쓰기
     if (decision.data) {
       session = { ...session, ...decision.data };
     }
@@ -119,49 +115,47 @@ app.post('/skill', async (req, res) => {
 
     switch (decision.action) {
       case 'greet':
-        responseText = '안녕하세요. 아이의 성별, 나이(개월), 키, 몸무게 등을 알려주세요.';
+        responseText = '안녕하세요. 아이의 성별, 나이, 키, 몸무게를 알려주세요.';
         break;
         
-      // [수정] AI 호출을 제거하고, 코드 기반의 확정적인 답변으로 변경하여 속도 개선
+      // [수정] 순차적 질문 로직 강화
       case 'ask_for_info':
         if (!session.sex) {
-          responseText = '성별을 알려주세요. (예: 남자)';
+          responseText = '아이의 성별을 알려주세요. (예: 남자)';
         } else if (!session.age_month) {
-          responseText = '나이를 개월 수로 알려주세요. (예: 10개월)';
+          responseText = '나이를 알려주세요. (예: 15개월 또는 3살)';
         } else {
-          responseText = "키, 몸무게, 머리둘레 정보를 알려주시거나, '분석'이라고 말씀해주세요.";
+          responseText = "키와 몸무게를 알려주세요. (예: 80cm 11kg)";
         }
         break;
 
-      // [수정] AI 리포트 생성을 제거하고, 코드에서 직접 결과 문자열을 생성
+      // [수정] 머리둘레 삭제
       case 'generate_report':
-        const { sex, age_month, height_cm, weight_kg, head_circumference_cm } = session;
-        const ageKey = String(age_month);
+        const { sex, age_month, height_cm, weight_kg } = session;
         
+        if (!sex || !age_month || (!height_cm && !weight_kg)) {
+            responseText = "분석을 위해 아이의 성별, 나이, 그리고 키나 몸무게 정보가 필요해요. 다시 알려주시겠어요?";
+            userSessions[userId] = null; // 정보 부족 시 초기화
+            break;
+        }
+
+        const ageKey = String(age_month);
         const reportLines = ['[성장 발달 분석 결과]'];
 
         if (height_cm && height_cm !== 'skipped') {
           const lms = lmsData[sex]?.height?.[ageKey];
           const percentile = lms ? calculatePercentile(height_cm, lms) : null;
-          reportLines.push(`- 키: ${height_cm}cm` + (percentile !== null ? ` (상위 ${percentile}%)` : ' (백분위 데이터 없음)'));
+          reportLines.push(`- 키: ${height_cm}cm` + (percentile !== null ? ` (상위 ${percentile}%)` : ` (${age_month}개월 데이터 없음)`));
         }
         if (weight_kg && weight_kg !== 'skipped') {
           const lms = lmsData[sex]?.weight?.[ageKey];
           const percentile = lms ? calculatePercentile(weight_kg, lms) : null;
-          reportLines.push(`- 몸무게: ${weight_kg}kg` + (percentile !== null ? ` (상위 ${percentile}%)` : ' (백분위 데이터 없음)'));
+          reportLines.push(`- 몸무게: ${weight_kg}kg` + (percentile !== null ? ` (상위 ${percentile}%)` : ` (${age_month}개월 데이터 없음)`));
         }
-        if (head_circumference_cm && head_circumference_cm !== 'skipped') {
-          // 현재 머리둘레 데이터가 없으므로 백분위는 계산하지 않음
-          reportLines.push(`- 머리둘레: ${head_circumference_cm}cm`);
-        }
-
-        if (reportLines.length === 1) {
-             responseText = "분석할 데이터가 부족합니다. 키, 몸무게, 머리둘레 중 하나 이상의 정보를 입력해주세요.";
-        } else {
-             reportLines.push("\n분석이 완료되었습니다. 초기화를 원하시면 '다시'라고 말씀해주세요.");
-             responseText = reportLines.join('\n');
-             userSessions[userId] = null; // 세션 초기화
-        }
+        
+        reportLines.push("\n분석이 완료되었습니다. 초기화를 원하시면 '다시'라고 말씀해주세요.");
+        responseText = reportLines.join('\n');
+        userSessions[userId] = null; // 분석 완료 후 세션 초기화
         break;
 
       case 'reset':
@@ -170,7 +164,7 @@ app.post('/skill', async (req, res) => {
         break;
 
       default:
-        responseText = "정보를 이해하지 못했어요. '남자 12개월 키 80cm' 와 같이 알려주세요.";
+        responseText = "정보를 이해하지 못했어요. '남자 3살 키 100cm' 와 같이 다시 알려주세요.";
     }
     
     res.json({
