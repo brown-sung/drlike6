@@ -1,3 +1,4 @@
+// index.js
 const express = require('express');
 const path = require('path');
 const { jStat } = require('jstat');
@@ -11,8 +12,9 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const app = express();
 app.use(express.json());
 
-// --- 1. 설정: 환경변수에서 OpenAI API 키 가져오기 ---
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+// --- 1. 설정: 환경변수에서 Gemini API 키 가져오기 ---
+// 이름을 명확하게 GEMINI_API_KEY로 변경했습니다. Vercel 환경변수도 이 이름으로 설정해주세요.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 console.log("LMS 데이터가 코드를 통해 로드되었습니다.");
 
@@ -38,40 +40,63 @@ function calculatePercentile(value, lms) {
 }
 
 /**
- * OpenAI API를 호출하여 응답을 가져옵니다.
+ * [수정됨] Gemini API를 호출하여 응답을 가져옵니다.
  */
-async function callOpenAI(prompt, isJsonMode = false) {
-  if (!OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY가 설정되지 않았습니다. Vercel 환경변수를 확인하세요.');
+async function callGemini(prompt, isJsonMode = false) {
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY가 설정되지 않았습니다. Vercel 환경변수를 확인하세요.');
   }
 
-  const body = {
-    model: 'gpt-4o-mini',
-    messages: [{ role: 'system', content: 'You are a helpful and empathetic AI assistant named Dr.LIKE, specializing in pediatric growth analysis. Your primary language is Korean.' }, { role: 'user', content: prompt }],
-    temperature: 0.3,
+  const model = 'gemini-1.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
+  const systemInstruction = {
+    // Gemini는 별도의 systemInstruction을 사용합니다.
+    role: 'system',
+    parts: [{ text: 'You are a helpful and empathetic AI assistant named Dr.LIKE, specializing in pediatric growth analysis. Your primary language is Korean.' }]
+  };
+  
+  const userMessage = {
+      role: 'user',
+      parts: [{ text: prompt }]
   };
 
+  const body = {
+    contents: [userMessage], // Gemini는 contents 배열을 사용합니다.
+    systemInstruction: systemInstruction,
+    generationConfig: {
+      temperature: 0.3,
+    },
+  };
+
+  // JSON 모드 설정
   if (isJsonMode) {
-    body.response_format = { type: "json_object" };
+    body.generationConfig.response_mime_type = "application/json";
   }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
     },
     body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error(`OpenAI API 오류: ${response.status} ${response.statusText}`, errorBody);
-    throw new Error('OpenAI API 호출에 실패했습니다.');
+    console.error(`Gemini API 오류: ${response.status} ${response.statusText}`, errorBody);
+    throw new Error('Gemini API 호출에 실패했습니다.');
   }
 
   const data = await response.json();
-  return data.choices[0].message.content;
+  
+  // Gemini API의 응답 구조에 맞춰 텍스트를 추출합니다.
+  if (data.candidates && data.candidates.length > 0 && data.candidates[0].content) {
+      return data.candidates[0].content.parts[0].text;
+  } else {
+      console.error('Gemini API에서 유효한 응답을 받지 못했습니다:', data);
+      throw new Error('Gemini API로부터 유효한 응답을 받지 못했습니다.');
+  }
 }
 
 // 루트 경로 핸들러: 배포 성공 확인 페이지
@@ -128,7 +153,8 @@ app.post('/skill', async (req, res) => {
       출력: \`{"action": "generate_report", "data": {"weight_kg": "skipped"}}\`
     `;
     
-    const rawDecision = await callOpenAI(decisionPrompt, true);
+    // callOpenAI -> callGemini 로 변경
+    const rawDecision = await callGemini(decisionPrompt, true);
     const decision = JSON.parse(rawDecision);
 
     // 세션 업데이트
@@ -156,21 +182,22 @@ app.post('/skill', async (req, res) => {
             
             너의 역할("소아청소년 성장 발달 AI")에 대해 간단히 소개하고, 자연스럽게 성장 발달에 대한 질문을 유도하는 짧은 답변을 생성해줘.
         `;
-        responseText = await callOpenAI(offTopicPrompt);
+        // callOpenAI -> callGemini 로 변경
+        responseText = await callGemini(offTopicPrompt);
         break;
 
       case 'ask_for_info':
-        const hasOptionalInfo = session.height_cm || session.weight_kg || session.head_circumference_cm;
         const responseGenerationPrompt = `
           너는 '닥터라이크'야. 따뜻하고 자연스러운 한국어 응답을 생성해야 해.
           - **현재까지 수집된 정보:** ${JSON.stringify(session)}
           - **사용자의 마지막 말:** "${userInput}"
           
           **상황에 맞는 응답 생성:**
-          - **만약 선택 정보가 하나도 없다면,** 사용자에게 최소 정보 규칙을 안내해줘. (예: "네, ${session.age_month}개월이군요. 정확한 분석을 위해 키, 몸무게, 머리둘레 중 확인하고 싶은 정보를 한 가지 이상 알려주시겠어요?")
-          - **만약 선택 정보가 이미 있다면,** 사용자에게 추가 정보를 물어봐줘. (예: "네, 키는 100cm이군요! 혹시 몸무게도 알고 계시면 알려주시겠어요? 원치 않으시면 '분석해줘'라고 말씀해주세요.")
+          - **만약 키, 몸무게, 머리둘레 정보가 하나도 없다면,** 사용자에게 최소 정보 규칙을 안내해줘. (예: "네, ${session.age_month}개월이군요. 정확한 분석을 위해 키, 몸무게, 머리둘레 중 확인하고 싶은 정보를 한 가지 이상 알려주시겠어요?")
+          - **만약 키, 몸무게, 머리둘레 정보가 이미 있다면,** 사용자에게 추가 정보를 물어봐줘. (예: "네, 키는 100cm이군요! 혹시 몸무게도 알고 계시면 알려주시겠어요? 원치 않으시면 '분석해줘'라고 말씀해주세요.")
         `;
-        responseText = await callOpenAI(responseGenerationPrompt);
+        // callOpenAI -> callGemini 로 변경
+        responseText = await callGemini(responseGenerationPrompt);
         break;
 
       case 'generate_report':
@@ -188,7 +215,6 @@ app.post('/skill', async (req, res) => {
             reportData['몸무게'] = lms ? `${weight_kg}kg (상위 ${calculatePercentile(weight_kg, lms)}%)` : `${weight_kg}kg (데이터 없음)`;
         }
         if(head_circumference_cm && head_circumference_cm !== 'skipped') {
-            // 머리둘레 데이터는 현재 제공된 CSV에 없으므로, 백분위 계산은 제외
             reportData['머리둘레'] = `${head_circumference_cm}cm`;
         }
 
@@ -197,7 +223,8 @@ app.post('/skill', async (req, res) => {
           - **아이 정보:** ${JSON.stringify(reportData)}
           - **작성 지침:** "모든 정보가 확인되어 우리 아이의 성장 발달 리포트를 정리해드렸어요."로 시작해줘. 제공된 정보만으로 리포트를 작성해야 해. \`[성장 발달 요약]\`, \`[상세 분석]\`, \`[의료진 조언]\` 헤더를 사용해서 구조적으로 작성해줘. 마지막에는 반드시 다음 주의 문구를 포함해줘: \`※ 이 결과는 2017 소아청소년 성장도표에 기반한 정보이며, 실제 의료적 진단을 대체할 수 없습니다. 정확한 진단 및 상담은 소아청소년과 전문의와 상의해주세요.\` 마지막으로 "다른 아이의 성장 발달이 궁금하시거나, 다시 상담을 시작하시려면 '다시 시작'이라고 말씀해주세요." 라고 안내해줘.
         `;
-        responseText = await callOpenAI(reportPrompt);
+        // callOpenAI -> callGemini 로 변경
+        responseText = await callGemini(reportPrompt);
         userSessions[userId] = null; // 세션 초기화
         break;
 
