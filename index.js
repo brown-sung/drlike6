@@ -46,7 +46,7 @@ async function callOpenAI(prompt, isJsonMode = false) {
   }
 
   const body = {
-    model: 'gpt-4o',
+    model: 'gpt-4o-mini',
     messages: [{ role: 'system', content: 'You are a helpful and empathetic AI assistant named Dr.LIKE, specializing in pediatric growth analysis. Your primary language is Korean.' }, { role: 'user', content: prompt }],
     temperature: 0.3,
   };
